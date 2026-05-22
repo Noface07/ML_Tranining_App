@@ -26,13 +26,7 @@ class ExpandedModelDetail extends StatelessWidget {
               ),
               child: Theme(
                 data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    if (entry.hparamsUsed.isNotEmpty) _HyperparamsAccordion(entry: entry),
-                    _MetricsAccordion(entry: entry),
-                  ],
-                ),
+                child: _MetricsTabs(entry: entry),
               ),
             ),
           ),
@@ -42,182 +36,272 @@ class ExpandedModelDetail extends StatelessWidget {
   }
 }
 
-class _HyperparamsAccordion extends StatelessWidget {
+// ---------------------------------------------------------------------------
+// Data holder for a named section within a grouped tab
+// ---------------------------------------------------------------------------
+
+class _SectionData {
+  final String title;
+  final dynamic value;
+  const _SectionData({required this.title, required this.value});
+}
+
+// ---------------------------------------------------------------------------
+// Tab-based metrics view  (5 tabs max)
+// ---------------------------------------------------------------------------
+
+class _MetricsTabs extends StatefulWidget {
   final LeaderboardEntryModel entry;
-  const _HyperparamsAccordion({required this.entry});
+  const _MetricsTabs({required this.entry});
+
+  @override
+  State<_MetricsTabs> createState() => _MetricsTabsState();
+}
+
+class _MetricsTabsState extends State<_MetricsTabs>
+    with SingleTickerProviderStateMixin {
+  late TabController _tabController;
+  late List<_TabDef> _tabs;
+
+  @override
+  void initState() {
+    super.initState();
+    _tabs = _buildTabs();
+    _tabController = TabController(length: _tabs.length, vsync: this);
+  }
+
+  @override
+  void dispose() {
+    _tabController.dispose();
+    super.dispose();
+  }
+
+  List<_TabDef> _buildTabs() {
+    final tabs = <_TabDef>[];
+
+    // ── 1. Overview ─────────────────────────────────────────────────────────
+    tabs.add(_TabDef(
+      label: 'Overview',
+      builder: () => _OverviewTabContent(entry: widget.entry),
+    ));
+
+    // ── 2. Hyperparameters (right after Overview) ────────────────────────────
+    if (widget.entry.hparamsUsed.isNotEmpty) {
+      tabs.add(_TabDef(
+        label: 'Hyperparameters',
+        builder: () => _HyperparamsTabContent(entry: widget.entry),
+      ));
+    }
+
+    // ── 3. Metrics (group all Map-valued keys except imp) ────────────────────
+    final metricSections = <_SectionData>[];
+    if (widget.entry.metrics != null) {
+      for (final metric in widget.entry.metrics!.entries) {
+        final keyLower = metric.key.toLowerCase().replaceAll('_', '');
+        if (keyLower == 'imp') continue;
+        if (metric.value is! Map) continue;
+
+        if (keyLower == 'generalizationmetrics') {
+          final filtered = Map.from(metric.value as Map)
+            ..removeWhere((k, v) {
+              final s = k.toString().toLowerCase().replaceAll('_', '').replaceAll(' ', '');
+              return s == 'isunderfit';
+            });
+          if (filtered.isNotEmpty) {
+            metricSections.add(_SectionData(
+              title: _labelFromKey(metric.key),
+              value: filtered,
+            ));
+          }
+        } else {
+          metricSections.add(_SectionData(
+            title: _labelFromKey(metric.key),
+            value: metric.value,
+          ));
+        }
+      }
+    }
+    if (metricSections.isNotEmpty) {
+      tabs.add(_TabDef(
+        label: 'Metrics',
+        builder: () => _GroupedTabContent(sections: metricSections),
+      ));
+    }
+
+    // ── 4. Model Analysis (deployment_health + model_fit_analysis from imp) ──
+    final modelSections = <_SectionData>[];
+    if (widget.entry.metrics != null &&
+        widget.entry.metrics!['imp'] is Map) {
+      final impMap = widget.entry.metrics!['imp'] as Map;
+      for (final sub in impMap.entries) {
+        final kl = sub.key.toString().toLowerCase().replaceAll('_', '');
+        if (kl == 'deploymenthealth' || kl == 'modelfitanalysis') {
+          modelSections.add(_SectionData(
+            title: _labelFromKey(sub.key.toString()),
+            value: sub.value,
+          ));
+        }
+      }
+    }
+    if (modelSections.isNotEmpty) {
+      tabs.add(_TabDef(
+        label: 'Model Analysis',
+        builder: () => _GroupedTabContent(sections: modelSections),
+      ));
+    }
+
+    // ── 5. Feature Importance ────────────────────────────────────────────────
+    if (widget.entry.featureImportance != null &&
+        widget.entry.featureImportance!.isNotEmpty) {
+      tabs.add(_TabDef(
+        label: 'Feature Importance',
+        builder: () => _FeatureImportanceTabContent(entry: widget.entry),
+      ));
+    }
+
+    return tabs;
+  }
 
   @override
   Widget build(BuildContext context) {
-    return ExpansionTile(
-      title: Text(
-        'Hyperparameters',
-        style: GoogleFonts.inter(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: AppColors.textPrimary,
-        ),
-      ),
-      childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+    if (_tabs.isEmpty) return const SizedBox.shrink();
+
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        Wrap(
-          spacing: 8,
-          runSpacing: 8,
-          children: entry.hparamsUsed.entries.map((param) {
-            return Container(
-              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-              decoration: BoxDecoration(
-                color: AppColors.white,
-                borderRadius: BorderRadius.circular(6),
-                border: Border.all(color: AppColors.tableBorder),
-              ),
-              child: Text(
-                '${param.key.replaceAll('_', ' ')}: ${_formatValue(param.value)}',
-                style: AppTextStyles.paramChip,
-              ),
-            );
-          }).toList(),
+        // Tab bar
+        Container(
+          decoration: const BoxDecoration(
+            border: Border(
+              bottom: BorderSide(color: AppColors.tableBorder, width: 1),
+            ),
+          ),
+          child: TabBar(
+            controller: _tabController,
+            isScrollable: true,
+            tabAlignment: TabAlignment.start,
+            indicatorColor: AppColors.primary,
+            indicatorWeight: 2,
+            labelColor: AppColors.primary,
+            unselectedLabelColor: AppColors.textSecondary,
+            labelStyle: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+            ),
+            unselectedLabelStyle: GoogleFonts.inter(
+              fontSize: 13,
+              fontWeight: FontWeight.w400,
+            ),
+            tabs: _tabs
+                .map((t) => Tab(text: t.label, height: 40))
+                .toList(),
+          ),
         ),
+        // Tab content
+        _AnimatedTabContent(tabController: _tabController, tabs: _tabs),
       ],
     );
   }
 }
 
-class _MetricsAccordion extends StatelessWidget {
-  final LeaderboardEntryModel entry;
-  const _MetricsAccordion({required this.entry});
+// ---------------------------------------------------------------------------
+// Animated tab content switcher
+// ---------------------------------------------------------------------------
 
-  Widget _buildMetricWidget(String key, dynamic value) {
-    final label = key
-        .replaceAll('_', ' ')
-        .split(' ')
-        .map((w) => w.isNotEmpty ? w.capitalize : '')
-        .join(' ');
+class _AnimatedTabContent extends StatefulWidget {
+  final TabController tabController;
+  final List<_TabDef> tabs;
+  const _AnimatedTabContent(
+      {required this.tabController, required this.tabs});
 
-    if (value is Map) {
-      return Theme(
-        data: ThemeData(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          title: Text(
-            label,
-            style: GoogleFonts.inter(
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-              color: AppColors.textSecondary,
-            ),
-          ),
-          tilePadding: EdgeInsets.zero,
-          childrenPadding: const EdgeInsets.only(left: 16, bottom: 8),
-          expandedCrossAxisAlignment: CrossAxisAlignment.start,
-          shape: const Border(),
-          collapsedShape: const Border(),
-          children: value.entries.map((e) {
-            return _buildMetricWidget(e.key.toString(), e.value);
-          }).toList(),
-        ),
-      );
-    } else {
-      return MetricCell(
-        label: label,
-        value: _formatValue(value),
-      );
-    }
+  @override
+  State<_AnimatedTabContent> createState() => _AnimatedTabContentState();
+}
+
+class _AnimatedTabContentState extends State<_AnimatedTabContent> {
+  late int _currentIndex;
+
+  @override
+  void initState() {
+    super.initState();
+    _currentIndex = widget.tabController.index;
+    widget.tabController.addListener(_onTabChanged);
+  }
+
+  void _onTabChanged() {
+    if (!widget.tabController.indexIsChanging) return;
+    setState(() => _currentIndex = widget.tabController.index);
+  }
+
+  @override
+  void dispose() {
+    widget.tabController.removeListener(_onTabChanged);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 180),
+      child: KeyedSubtree(
+        key: ValueKey(_currentIndex),
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: widget.tabs[_currentIndex].builder(),
+        ),
+      ),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Tab definition
+// ---------------------------------------------------------------------------
+
+class _TabDef {
+  final String label;
+  final Widget Function() builder;
+  const _TabDef({required this.label, required this.builder});
+}
+
+// ---------------------------------------------------------------------------
+// Overview tab
+// ---------------------------------------------------------------------------
+
+class _OverviewTabContent extends StatelessWidget {
+  final LeaderboardEntryModel entry;
+  const _OverviewTabContent({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
     final isMobile = context.isMobile;
-    
-    final metricsWidget = Column(
+
+    final scalarMetrics = <Widget>[];
+    if (entry.metrics == null || entry.metrics!.isEmpty) {
+      scalarMetrics.addAll([
+        const MetricCell(label: 'Precision', value: '—'),
+        const MetricCell(label: 'Accuracy', value: '—'),
+        const MetricCell(label: 'Recall', value: '—'),
+        const MetricCell(label: 'F1', value: '—'),
+      ]);
+    } else {
+      for (final metric in entry.metrics!.entries) {
+        final keyLower = metric.key.toLowerCase().replaceAll('_', '');
+        if (keyLower == 'imp') continue;
+        if (metric.value is Map) continue;
+        scalarMetrics.add(MetricCell(
+          label: _labelFromKey(metric.key),
+          value: _formatValue(metric.value),
+        ));
+      }
+    }
+
+    final metricsCol = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        if (entry.metrics == null || entry.metrics!.isEmpty)
-          ...[
-            const MetricCell(label: 'Precision', value: '—'),
-            const MetricCell(label: 'Accuracy', value: '—'),
-            const MetricCell(label: 'Recall', value: '—'),
-            const MetricCell(label: 'F1', value: '—'),
-          ]
-        else
-          ...entry.metrics!.entries.expand((metric) {
-            final keyLower = metric.key.toLowerCase().replaceAll('_', '');
-            if (keyLower == 'imp') {
-              final list = <Widget>[];
-              if (metric.value is Map) {
-                final map = metric.value as Map;
-                for (final e in map.entries) {
-                  final subKey = e.key.toString();
-                  final subKeyLower = subKey.toLowerCase().replaceAll('_', '');
-                  if (subKeyLower == 'deploymenthealth' ||
-                      subKeyLower == 'modelfitanalysis') {
-                    list.add(_buildMetricWidget(subKey, e.value));
-                  }
-                }
-              }
-              return list;
-            }
-            if (keyLower == 'generalizationmetrics') {
-              if (metric.value is Map) {
-                final originalMap = metric.value as Map;
-                final filteredMap = Map.from(originalMap)..removeWhere((k, v) {
-                  final kStr = k.toString().toLowerCase().replaceAll('_', '').replaceAll(' ', '');
-                  return kStr == 'isunderfit';
-                });
-                if (filteredMap.isEmpty) {
-                  return <Widget>[];
-                }
-                return [_buildMetricWidget(metric.key, filteredMap)];
-              }
-            }
-            return [_buildMetricWidget(metric.key, metric.value)];
-          }),
-      ],
+      children: scalarMetrics,
     );
 
-    final featureImportanceWidget = entry.featureImportance != null && entry.featureImportance!.isNotEmpty
-        ? Theme(
-            data: ThemeData(dividerColor: Colors.transparent),
-            child: ExpansionTile(
-              title: Text(
-                'Feature Importance',
-                style: GoogleFonts.inter(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-              tilePadding: EdgeInsets.zero,
-              childrenPadding: const EdgeInsets.only(left: 0, bottom: 8),
-              expandedCrossAxisAlignment: CrossAxisAlignment.start,
-              shape: const Border(),
-              collapsedShape: const Border(),
-              children: [
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: entry.featureImportance!.entries.map((fi) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 8),
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                        decoration: BoxDecoration(
-                          color: AppColors.white,
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: AppColors.tableBorder),
-                        ),
-                        child: Text(
-                          '${fi.key.replaceAll('_', ' ')}: ${_formatValue(fi.value)}',
-                          style: AppTextStyles.paramChip,
-                        ),
-                      ),
-                    );
-                  }).toList(),
-                ),
-              ],
-            ),
-          )
-        : const SizedBox.shrink();
-
-    final infoWidget = Column(
+    final infoCol = Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         if (entry.trainingDurationSeconds != null)
@@ -229,7 +313,11 @@ class _MetricsAccordion extends StatelessWidget {
           const SizedBox(height: 8),
           Text(
             'Tags',
-            style: GoogleFonts.inter(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSecondary),
+            style: GoogleFonts.inter(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+            ),
           ),
           const SizedBox(height: 6),
           Wrap(
@@ -241,58 +329,250 @@ class _MetricsAccordion extends StatelessWidget {
       ],
     );
 
-    return ExpansionTile(
-      title: Text(
-        'Metrics & Info',
-        style: GoogleFonts.inter(
-          fontSize: 13,
-          fontWeight: FontWeight.w600,
-          color: AppColors.textPrimary,
-        ),
-      ),
-      childrenPadding: const EdgeInsets.only(left: 16, right: 16, bottom: 16),
-      expandedCrossAxisAlignment: CrossAxisAlignment.start,
+    if (isMobile) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          metricsCol,
+          if (entry.trainingDurationSeconds != null || entry.tagsUsed.isNotEmpty) ...[
+            const SizedBox(height: 16),
+            infoCol,
+          ],
+        ],
+      );
+    }
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: [
-        if (isMobile)
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              metricsWidget,
-              const SizedBox(height: 16),
-              featureImportanceWidget,
-              const SizedBox(height: 16),
-              infoWidget,
-            ],
-          )
-        else
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: metricsWidget),
-              const SizedBox(width: 24),
-              Expanded(child: featureImportanceWidget),
-              const SizedBox(width: 24),
-              Expanded(child: infoWidget),
-            ],
-          ),
+        Expanded(child: metricsCol),
+        const SizedBox(width: 32),
+        Expanded(child: infoCol),
       ],
     );
   }
+}
+
+// ---------------------------------------------------------------------------
+// Grouped tab: sections displayed in 2 columns (desktop) / 1 column (mobile)
+// ---------------------------------------------------------------------------
+
+class _GroupedTabContent extends StatelessWidget {
+  final List<_SectionData> sections;
+  const _GroupedTabContent({required this.sections});
+
+  @override
+  Widget build(BuildContext context) {
+    final isMobile = context.isMobile;
+
+    if (isMobile || sections.length == 1) {
+      // Single column
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          for (int i = 0; i < sections.length; i++) ...[
+            if (i > 0) const SizedBox(height: 20),
+            _SectionBlock(section: sections[i]),
+          ],
+        ],
+      );
+    }
+
+    // Split sections into two halves for a 2-column layout
+    final mid = (sections.length / 2).ceil();
+    final leftSections = sections.sublist(0, mid);
+    final rightSections = sections.sublist(mid);
+
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < leftSections.length; i++) ...[
+                if (i > 0) const SizedBox(height: 20),
+                _SectionBlock(section: leftSections[i]),
+              ],
+            ],
+          ),
+        ),
+        const SizedBox(width: 32),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              for (int i = 0; i < rightSections.length; i++) ...[
+                if (i > 0) const SizedBox(height: 20),
+                _SectionBlock(section: rightSections[i]),
+              ],
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+class _SectionBlock extends StatelessWidget {
+  final _SectionData section;
+  const _SectionBlock({required this.section});
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Section heading
+        Text(
+          section.title,
+          style: GoogleFonts.inter(
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+            color: AppColors.primary,
+            letterSpacing: 0.3,
+          ),
+        ),
+        const SizedBox(height: 8),
+        // Section rows
+        ..._buildRows(section.value),
+      ],
+    );
+  }
+
+  List<Widget> _buildRows(dynamic value) {
+    if (value is! Map) {
+      return [MetricCell(label: section.title, value: _formatValue(value))];
+    }
+    final rows = <Widget>[];
+    for (final e in value.entries) {
+      if (e.value is Map) {
+        rows.add(Padding(
+          padding: const EdgeInsets.only(top: 10, bottom: 4),
+          child: Text(
+            _labelFromKey(e.key.toString()),
+            style: GoogleFonts.inter(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textSecondary,
+              letterSpacing: 0.2,
+            ),
+          ),
+        ));
+        rows.addAll(_buildNestedRows(e.value as Map));
+      } else {
+        rows.add(MetricCell(
+          label: _labelFromKey(e.key.toString()),
+          value: _formatValue(e.value),
+        ));
+      }
+    }
+    return rows;
+  }
+
+  List<Widget> _buildNestedRows(Map map) {
+    return map.entries.map<Widget>((e) {
+      return MetricCell(
+        label: _labelFromKey(e.key.toString()),
+        value: _formatValue(e.value),
+      );
+    }).toList();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Feature Importance tab
+// ---------------------------------------------------------------------------
+
+class _FeatureImportanceTabContent extends StatelessWidget {
+  final LeaderboardEntryModel entry;
+  const _FeatureImportanceTabContent({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: entry.featureImportance!.entries.map((fi) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppColors.tableBorder),
+          ),
+          child: Text(
+            '${fi.key.replaceAll('_', ' ')}: ${_formatValue(fi.value)}',
+            style: AppTextStyles.paramChip,
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Hyperparameters tab
+// ---------------------------------------------------------------------------
+
+class _HyperparamsTabContent extends StatelessWidget {
+  final LeaderboardEntryModel entry;
+  const _HyperparamsTabContent({required this.entry});
+
+  @override
+  Widget build(BuildContext context) {
+    return Wrap(
+      spacing: 8,
+      runSpacing: 8,
+      children: entry.hparamsUsed.entries.map((param) {
+        return Container(
+          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+          decoration: BoxDecoration(
+            color: AppColors.white,
+            borderRadius: BorderRadius.circular(6),
+            border: Border.all(color: AppColors.tableBorder),
+          ),
+          child: Text(
+            '${param.key.replaceAll('_', ' ')}: ${_formatValue(param.value)}',
+            style: AppTextStyles.paramChip,
+          ),
+        );
+      }).toList(),
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+String _labelFromKey(String key) {
+  return key
+      .replaceAll('_', ' ')
+      .split(' ')
+      .map((w) =>
+          w.isNotEmpty ? w[0].toUpperCase() + w.substring(1).toLowerCase() : '')
+      .join(' ');
 }
 
 String _formatValue(dynamic val) {
   if (val is double) {
     return val.toStringAsFixed(4);
   } else if (val is Map) {
-    // Nested dictionaries handled gracefully
-    final entries = val.entries.map((e) => '${e.key.toString().replaceAll('_', ' ')}: ${_formatValue(e.value)}').join(', ');
+    final entries = val.entries
+        .map((e) =>
+            '${e.key.toString().replaceAll('_', ' ')}: ${_formatValue(e.value)}')
+        .join(', ');
     return '{$entries}';
   } else if (val is List) {
-    final entries = val.map((e) => _formatValue(e)).join(', ');
-    return '[$entries]';
+    return '[${val.map((e) => _formatValue(e)).join(', ')}]';
   }
   return val.toString().replaceAll('_', ' ');
 }
+
+// ---------------------------------------------------------------------------
+// MetricCell — fixed label column so value is always close to label
+// ---------------------------------------------------------------------------
 
 class MetricCell extends StatelessWidget {
   final String label;
@@ -305,13 +585,20 @@ class MetricCell extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 6),
       child: Row(
-        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(
-            label,
-            style: GoogleFonts.inter(fontSize: 13, color: AppColors.textSecondary),
+          // Fixed-width label column — keeps value snug regardless of container width
+          SizedBox(
+            width: 190,
+            child: Text(
+              label,
+              style: GoogleFonts.inter(
+                fontSize: 13,
+                color: AppColors.textSecondary,
+              ),
+            ),
           ),
-          const SizedBox(width: 8),
+          const SizedBox(width: 12),
           Flexible(
             child: Text(
               value,
@@ -320,7 +607,6 @@ class MetricCell extends StatelessWidget {
                 fontWeight: FontWeight.w600,
                 color: AppColors.textPrimary,
               ),
-              textAlign: TextAlign.right,
             ),
           ),
         ],

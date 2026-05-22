@@ -20,6 +20,9 @@ void main() async {
   final token = AppPreferences.getString('auth_token');
   if (token != null) {
     final authManager = GetIt.instance<AuthManager>();
+    // Refresh the token first so any stale stored token is replaced before
+    // we attempt authenticated calls (e.g. fetchUserProfile).
+    await authManager.refreshToken();
     authManager.startTokenRefreshTimer();
     authManager.fetchUserProfile();
   }
