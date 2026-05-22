@@ -5,6 +5,7 @@ import '../theme/app_dimensions.dart';
 import '../theme/app_text_styles.dart';
 import '../constants/app_strings.dart';
 import '../../data/local/preference/app_preferences.dart';
+import 'package:flutter_svg/flutter_svg.dart';
 
 class AppSidebar extends StatelessWidget {
   final String selectedRoute;
@@ -55,13 +56,13 @@ class AppSidebar extends StatelessWidget {
                         width: 36,
                         height: 36,
                         decoration: BoxDecoration(
-                          color: AppColors.primary,
+                          color: AppColors.white  ,
                           borderRadius: BorderRadius.circular(8),
                         ),
-                        child: const Icon(
-                          Icons.grid_view_rounded,
-                          color: AppColors.white,
-                          size: 20,
+                        child: SvgPicture.asset(
+                          'assets/images/group_15123.svg',
+                          width: 20,
+                          height: 20,
                         ),
                       ),
                       const SizedBox(width: 10),
@@ -75,7 +76,7 @@ class AppSidebar extends StatelessWidget {
                               overflow: TextOverflow.ellipsis,
                             ),
                             Text(
-                              AppStrings.appSubtitle,
+                              AppStrings.appSubtitleML,
                               style: AppTextStyles.sidebarSub,
                               overflow: TextOverflow.ellipsis,
                             ),

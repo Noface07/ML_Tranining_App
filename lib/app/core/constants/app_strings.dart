@@ -4,6 +4,7 @@ class AppStrings {
   // App
   static const String appName = 'Anexee';
   static const String appSubtitle = 'Analytical Excellence';
+  static const String appSubtitleML = 'ML Training Engine';
   static const String appBarTitle = 'Anexee Companion';
 
   // Sidebar
